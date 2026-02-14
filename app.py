@@ -1,98 +1,198 @@
+
 from flask import Flask, render_template, request
-import pickle
-import numpy as np
-from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.models import load_model
-import re
-import html
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
+from tensorflow.keras.preprocessing import image
+import numpy as np
+import os
+from werkzeug.utils import secure_filename
 
+# ------------------ CONFIG ------------------
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(APP_ROOT, "static", "uploads")
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
 
-# Load the saved model and tokenizer
-model = load_model('cnn_sent_model.h5')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-with open('tekenizer.pkl', 'rb') as f:
-    tekenizer = pickle.load(f)
-
-# Define maxlen (the same as during training)
-maxlen = 100
-
-# Initialize Flask app
+# ------------------ APP INIT ----------------
 app = Flask(__name__)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+# ------------------ MODEL -------------------
+model = load_model("facial_emotion_detection_model.h5")
+
+class_names = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+
+# ------------------ UTILS -------------------
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# Clean input text (you can modify this with your cleaning function)
-# Download NLTK resources (only the first time)
-nltk.download('stopwords')
+def detect_emotion(img_path):
+    img = image.load_img(
+        img_path,
+        target_size=(48, 48),
+        color_mode="grayscale"
+    )
 
-# Initialize the stemmer and stopwords list
-stemmer = PorterStemmer()
-stop_words = set(stopwords.words('english'))
+    img_array = image.img_to_array(img)
+    img_array = img_array / 255.0
+    img_array = np.expand_dims(img_array, axis=0)
 
-def clean_review_with_stopwords_and_stemming(review):
-    # Decode HTML entities (like <br /> to actual line breaks)
-    review = html.unescape(review)
+    prediction = model.predict(img_array, verbose=0)
+    idx = np.argmax(prediction)
 
-    # Remove HTML tags (e.g., <br />)
-    review = re.sub(r'<.*?>', '', review)
+    return class_names[idx], round(float(prediction[0][idx]) * 100, 2)
 
-    # Convert to lowercase
-    review = review.lower()
+# ------------------ ROUTES ------------------
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
 
-    # Remove non-alphabetic characters and digits
-    review = re.sub(r'[^a-z\s]', '', review)
+        if "file" not in request.files:
+            return render_template("index.html", error="No file uploaded")
 
-    # Tokenization: Split the review into words
-    words = review.split()
+        file = request.files["file"]
 
-    # Remove stopwords and apply stemming
-    cleaned_words = [stemmer.stem(word) for word in words if word not in stop_words]
+        if file.filename == "":
+            return render_template("index.html", error="No file selected")
 
-    # Rejoin the words back into a cleaned string
-    cleaned_review = ' '.join(cleaned_words)
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+            file.save(file_path)
 
-    return cleaned_review
+            emotion, confidence = detect_emotion(file_path)
 
-# Prediction function
-def predict_sentiment(text):
-    # Clean the text
-    text = clean_review_with_stopwords_and_stemming(text)
+            return render_template(
+                "index.html",
+                image_path=f"static/uploads/{filename}",
+                emotion=emotion,
+                confidence=confidence
+            )
 
-    # Tokenize and pad the text
-    sequence = tekenizer.texts_to_sequences([text])
-    padded_sequence = pad_sequences(sequence, padding='post', maxlen=maxlen)
+        return render_template("index.html", error="Invalid file format")
 
-    # Make the prediction
-    prediction = model.predict(padded_sequence)
+    return render_template("index.html")
 
-    # Return the result
-    if prediction > 0.5:
-        return "Positive"
-    else:
-        return "Negative"
-
-
-# Route for the homepage
-@app.route('/')
-def home():
-    return render_template('index.html')
-
-
-# Route to handle the form submission and display prediction
-@app.route('/predict', methods=['POST'])
-def predict():
-    if request.method == 'POST':
-        # Get the input text from the form
-        text = request.form['review_text']
-
-        # Get the sentiment prediction
-        sentiment = predict_sentiment(text)
-
-        return render_template('index.html', sentiment=sentiment)
-
-
-# Run the Flask app
-if __name__ == '__main__':
+# ------------------ RUN ---------------------
+if __name__ == "__main__":
     app.run(debug=True)
+
+
+
+# from flask import Flask, render_template, request
+# from tensorflow.keras.models import load_model
+# from tensorflow.keras.preprocessing import image
+# import numpy as np
+# import os
+
+# # Initialize Flask app
+# app = Flask(__name__)
+
+# # Load the trained model
+# model = load_model('facial_emotion_detection_model.h5')
+
+# # Define class names
+# class_names = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+
+
+# # Upload folder
+# UPLOAD_FOLDER = 'static/uploads'
+# os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# # Emotion detection function
+# def detect_emotion(img_path):
+#     img = image.load_img(img_path, target_size=(48, 48), color_mode='grayscale')
+#     img_array = image.img_to_array(img) / 255.0
+#     img_array = np.expand_dims(img_array, axis=0)
+
+#     prediction = model.predict(img_array)
+#     predicted_index = np.argmax(prediction)
+#     predicted_class = class_names[predicted_index]
+#     confidence = round(prediction[0][predicted_index] * 100, 2)
+
+#     return predicted_class, confidence
+
+# # Home route
+# @app.route('/', methods=['GET', 'POST'])
+# def index():
+#     if request.method == 'POST':
+#         if 'file' not in request.files:
+#             return 'No file uploaded!'
+#         file = request.files['file']
+#         if file.filename == '':
+#             return 'No file selected!'
+
+#         if file:
+#             file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+#             file.save(file_path)
+
+#             # Detect emotion
+#             emotion, confidence = detect_emotion(file_path)
+
+#             return render_template('index.html', image_path=file_path, emotion=emotion, confidence=confidence)
+
+#     return render_template('index.html')
+
+# if __name__ == '__main__':
+#     app.run(debug=True)
+
+
+
+
+# import streamlit as st
+# import numpy as np
+# from tensorflow.keras.models import load_model
+# from tensorflow.keras.preprocessing import image
+# from PIL import Image
+
+# # Page config
+# st.set_page_config(page_title="Facial Emotion Detection", layout="centered")
+
+# # Load model (cache for performance)
+# @st.cache_resource
+# def load_emotion_model():
+#     return load_model("facial_emotion_detection_model.h5")
+
+# model = load_emotion_model()
+
+# # Class names
+# class_names = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+
+# # Emotion detection function
+# def detect_emotion(img):
+#     img = img.convert("L")              # Convert to grayscale
+#     img = img.resize((48, 48))
+
+#     img_array = image.img_to_array(img)
+#     img_array = img_array / 255.0
+#     img_array = np.expand_dims(img_array, axis=0)
+
+#     prediction = model.predict(img_array, verbose=0)
+#     predicted_index = np.argmax(prediction)
+
+#     predicted_class = class_names[predicted_index]
+#     confidence = round(float(prediction[0][predicted_index]) * 100, 2)
+
+#     return predicted_class, confidence
+
+# # UI
+# st.title("😊 Facial Emotion Detection")
+# st.write("Upload a face image to detect emotion")
+
+# uploaded_file = st.file_uploader(
+#     "Choose an image",
+#     type=["jpg", "jpeg", "png"]
+# )
+
+# if uploaded_file is not None:
+#     img = Image.open(uploaded_file)
+
+#     st.image(img, caption="Uploaded Image", use_container_width=True)
+
+#     with st.spinner("Detecting emotion..."):
+#         emotion, confidence = detect_emotion(img)
+
+#     st.success(f"**Emotion:** {emotion.upper()}")
+#     st.info(f"**Confidence:** {confidence}%")
